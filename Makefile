@@ -1,7 +1,7 @@
 .PHONY: help lint format test test-unit test-integration test-acceptance \
 	test-container coverage check install setup podman-init pr \
 	ui-server ui-dev stop start ui-restart \
-	db-shell backup restore clean ensure-uv
+	db-shell backup restore clean ensure-uv prime-openbb
 
 # Configuration
 PROFILE ?= balanced
@@ -110,8 +110,7 @@ podman-init:
 install: ensure-uv
 	@echo "Installing Python dependencies (Zero-Pollution)..."
 	uv sync --no-dev
-	@echo "Priming OpenBB (Building extensions in main thread)..."
-	@uv run python -c "from openbb import obb; _ = obb.equity"
+	@$(MAKE) prime-openbb
 	@echo "Installing UI dependencies (using pnpm)..."
 	@cd ui && uv run pnpm install
 	@echo ""
@@ -124,12 +123,16 @@ install: ensure-uv
 setup: ensure-uv
 	@echo "Setting up development environment..."
 	uv sync
-	@echo "Priming OpenBB (Building extensions in main thread)..."
-	@uv run python -c "from openbb import obb; _ = obb.equity"
+	@$(MAKE) prime-openbb
 	@cd ui && uv run pnpm install
 	uv run pre-commit install
 	uv run pre-commit install --hook-type pre-push
 	@echo "Environment and git hooks installed."
+
+# Setup Tool
+prime-openbb: ensure-uv
+	@echo "Priming OpenBB (Building extensions in main thread)..."
+	@uv run python -c "from openbb import obb; _ = obb.equity"
 
 # UI & API Management
 ui-server: ensure-uv
@@ -150,7 +153,7 @@ stop:
 	@pkill -f "equiquant-worker" 2>/dev/null || true
 	@sleep 0.5
 
-start: ensure-uv stop
+start: ensure-uv stop prime-openbb
 	@echo "Starting EquiQuant in background..."
 	@mkdir -p logs
 	@nohup env LOG_LEVEL=$(PYTHON_LOG_LEVEL) uv run honcho start > logs/orchestrator.log 2>&1 &
@@ -159,9 +162,7 @@ start: ensure-uv stop
 	@echo "UI:  http://localhost:$(UI_PORT)"
 	@echo "Use 'make stop' to shutdown."
 
-dev: ensure-uv stop
-	@echo "Ensuring OpenBB is primed (building extensions)..."
-	@uv run python -c "from openbb import obb; _ = obb.equity"
+dev: ensure-uv stop prime-openbb
 	@mkdir -p logs
 	@env LOG_LEVEL=$(PYTHON_LOG_LEVEL) uv run honcho start
 
