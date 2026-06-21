@@ -510,6 +510,7 @@ def fetch_batch_with_backoff(  # noqa: C901
 
 		except RateLimitError as e:
 			logger.warning(f"Rate limited during fetch for {batch_tickers}: {e}")
+			stats.record_cooldown(current_cooldown)
 			time.sleep(current_cooldown)
 			current_cooldown = min(current_cooldown * 2, max_cooldown)
 		except PermanentFetchError as e:
@@ -522,6 +523,7 @@ def fetch_batch_with_backoff(  # noqa: C901
 			)
 			if is_rate:
 				logger.warning(f"Transient rate limit for {batch_tickers}: {e}")
+				stats.record_cooldown(current_cooldown)
 				time.sleep(current_cooldown)
 				current_cooldown = min(current_cooldown * 2, max_cooldown)
 			else:

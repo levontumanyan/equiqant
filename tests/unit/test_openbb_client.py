@@ -82,8 +82,6 @@ def test_fetch_with_retry_rate_limit_fail_fast(mocker):
 
 
 def test_fetch_openbb_data_bulk_rate_limit(mocker):
-	import pytest
-
 	from core.openbb_client import RateLimitError, fetch_openbb_data_bulk
 
 	mocker.patch("time.sleep")
@@ -100,6 +98,20 @@ def test_fetch_openbb_data_bulk_rate_limit(mocker):
 		fetch_openbb_data_bulk(["AAPL", "MSFT"])
 
 	assert mock_obb.equity.fundamental.metrics.call_count == 0
+
+
+def test_fetch_openbb_data_bulk_critical_failure(mocker):
+	from core.openbb_client import fetch_openbb_data_bulk
+
+	class BrokenObb:
+		@property
+		def equity(self):
+			raise AttributeError("'App' object has no attribute 'equity'")
+
+	mocker.patch("openbb.obb", new=BrokenObb())
+
+	with pytest.raises(AttributeError):
+		fetch_openbb_data_bulk(["AAPL", "MSFT"])
 
 
 def test_fetch_openbb_data_bulk(mocker):
