@@ -318,7 +318,7 @@ def fetch_openbb_data_bulk(
 			)
 		except RateLimitError as e:
 			logger.error(f"Bulk fetch RATE LIMITED: {e}")
-			return False, {}
+			raise
 		except PermanentFetchError:
 			raise
 
@@ -331,12 +331,12 @@ def fetch_openbb_data_bulk(
 		stats.api_successes += 1
 		return critical_success, result
 
-	except PermanentFetchError:
+	except (RateLimitError, PermanentFetchError):
 		raise
 	except Exception as e:
 		logger.error(f"OpenBB bulk fetch critical failure: {e}")
 		stats.errors += 1
-		return False, {}
+		raise
 
 
 def _merge_single_res(res: Any, combined_data: Dict[str, Any]) -> None:
@@ -440,7 +440,7 @@ def probe_api(ticker: str) -> bool:
 		return True
 
 
-def fetch_batch_with_backoff(
+def fetch_batch_with_backoff(  # noqa: C901
 	batch_tickers: List[str], current_cooldown: float, db_path: Optional[str] = None
 ) -> Tuple[bool, float, Dict[str, Dict[str, Any]]]:
 	"""
@@ -508,14 +508,27 @@ def fetch_batch_with_backoff(
 			current_cooldown = min(current_cooldown * 2, max_cooldown)
 			logger.info(f"Probe successful for {probe_ticker}. Resuming bulk fetch.")
 
+		except RateLimitError as e:
+			logger.warning(f"Rate limited during fetch for {batch_tickers}: {e}")
+			time.sleep(current_cooldown)
+			current_cooldown = min(current_cooldown * 2, max_cooldown)
 		except PermanentFetchError as e:
 			logger.error(f"Permanent batch fetch failure (skipping retries): {e}")
 			return False, current_cooldown, {}
 		except Exception as e:
-			logger.warning(f"Fetch error for {batch_tickers}: {e}")
-			time.sleep(current_cooldown)
-			current_cooldown = min(current_cooldown * 2, max_cooldown)
-			break
+			err_str = str(e).lower()
+			is_rate = any(
+				x in err_str for x in ["429", "rate limit", "too many requests"]
+			)
+			if is_rate:
+				logger.warning(f"Transient rate limit for {batch_tickers}: {e}")
+				time.sleep(current_cooldown)
+				current_cooldown = min(current_cooldown * 2, max_cooldown)
+			else:
+				logger.error(
+					f"Critical failure for {batch_tickers} (skipping retries): {e}"
+				)
+				return False, current_cooldown, {}
 	return False, current_cooldown, {}
 
 
@@ -562,6 +575,9 @@ def fetch_batch_single_attempt(
 			return True, False, data
 		# Empty data with success=False → rate-limit
 		return False, True, {}
+	except RateLimitError as e:
+		logger.warning(f"Rate limited for batch starting {batch_tickers[0]}: {e}")
+		return False, True, {}
 	except PermanentFetchError as e:
 		logger.error(
 			f"Permanent fetch error for batch starting {batch_tickers[0]}: {e}"
@@ -570,7 +586,11 @@ def fetch_batch_single_attempt(
 	except Exception as e:
 		err_str = str(e).lower()
 		is_rate = any(x in err_str for x in ["429", "rate limit", "too many requests"])
-		logger.warning(
-			f"Transient fetch error for batch starting {batch_tickers[0]}: {e}"
-		)
-		return False, is_rate, {}
+		if is_rate:
+			logger.warning(
+				f"Transient rate-limit error for batch starting {batch_tickers[0]}: {e}"
+			)
+			return False, True, {}
+		else:
+			logger.error(f"Critical failure for batch starting {batch_tickers[0]}: {e}")
+			return False, False, {}
